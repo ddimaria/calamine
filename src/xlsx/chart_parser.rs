@@ -122,7 +122,8 @@ pub(crate) fn parse_chart_space<RS: BufRead>(
                     if chart.style.is_none() {
                         // `c14:style` (inside mc:AlternateContent) stores the
                         // style number offset by 100 relative to `c:style`.
-                        chart.style = val_attr::<u32>(&e)?.map(|v| if v > 100 { v - 100 } else { v });
+                        chart.style =
+                            val_attr::<u32>(&e)?.map(|v| if v > 100 { v - 100 } else { v });
                     }
                     skip_element(xml, &e)?;
                 }
@@ -217,18 +218,26 @@ fn parse_plot_area<RS: BufRead>(
                     let group = parse_chart_group(xml, &e, theme_colors)?;
                     chart.groups.push(group);
                 }
-                b"catAx" => chart
-                    .axes
-                    .push(parse_axis(xml, &e, ChartAxisType::Category, theme_colors)?),
-                b"valAx" => chart
-                    .axes
-                    .push(parse_axis(xml, &e, ChartAxisType::Value, theme_colors)?),
-                b"dateAx" => chart
-                    .axes
-                    .push(parse_axis(xml, &e, ChartAxisType::Date, theme_colors)?),
-                b"serAx" => chart
-                    .axes
-                    .push(parse_axis(xml, &e, ChartAxisType::Series, theme_colors)?),
+                b"catAx" => {
+                    chart
+                        .axes
+                        .push(parse_axis(xml, &e, ChartAxisType::Category, theme_colors)?)
+                }
+                b"valAx" => {
+                    chart
+                        .axes
+                        .push(parse_axis(xml, &e, ChartAxisType::Value, theme_colors)?)
+                }
+                b"dateAx" => {
+                    chart
+                        .axes
+                        .push(parse_axis(xml, &e, ChartAxisType::Date, theme_colors)?)
+                }
+                b"serAx" => {
+                    chart
+                        .axes
+                        .push(parse_axis(xml, &e, ChartAxisType::Series, theme_colors)?)
+                }
                 b"spPr" => chart.plot_area_format = parse_shape_properties(xml, &e, theme_colors)?,
                 b"dTable" => chart.data_table = Some(parse_data_table(xml, &e, theme_colors)?),
                 _ => skip_element(xml, &e)?,
@@ -746,9 +755,7 @@ fn parse_data_cache<RS: BufRead>(
                     source.levels.push(level);
                 }
                 b"pt" => {
-                    let idx: Option<usize> = e
-                        .raw_attr(b"idx")?
-                        .and_then(parse_bytes);
+                    let idx: Option<usize> = e.raw_attr(b"idx")?.and_then(parse_bytes);
                     let value = parse_cache_point(xml, &e, numeric)?;
                     let idx = idx.unwrap_or(source.values.len());
                     if source.values.len() <= idx {
@@ -2025,9 +2032,7 @@ fn parse_color_container<RS: BufRead>(
         match xml.read_event_into(&mut buf)? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"srgbClr" => {
-                    let base = e
-                        .raw_attr(b"val")?
-                        .and_then(parse_hex_color);
+                    let base = e.raw_attr(b"val")?.and_then(parse_hex_color);
                     let parsed = parse_color_modifiers(xml, &e, base)?;
                     color = color.or(parsed);
                 }
@@ -2184,8 +2189,10 @@ pub(crate) fn parse_chartex_space<RS: BufRead>(
 ) -> Result<Chart, XlsxError> {
     let mut chart = Chart::default();
     // Data id -> (categories, values), from cx:chartData.
-    let mut data: std::collections::HashMap<String, (Option<ChartDataSource>, Option<ChartDataSource>)> =
-        std::collections::HashMap::new();
+    let mut data: std::collections::HashMap<
+        String,
+        (Option<ChartDataSource>, Option<ChartDataSource>),
+    > = std::collections::HashMap::new();
     let mut buf = Vec::new();
     loop {
         buf.clear();
@@ -2244,7 +2251,10 @@ pub(crate) fn parse_chartex_space<RS: BufRead>(
 fn parse_chartex_data<RS: BufRead>(
     xml: &mut XmlReader<RS>,
     parent: &BytesStart,
-    data: &mut std::collections::HashMap<String, (Option<ChartDataSource>, Option<ChartDataSource>)>,
+    data: &mut std::collections::HashMap<
+        String,
+        (Option<ChartDataSource>, Option<ChartDataSource>),
+    >,
 ) -> Result<(), XlsxError> {
     let mut buf = Vec::new();
     loop {
@@ -2477,9 +2487,7 @@ fn parse_chartex_layout<RS: BufRead>(
                     skip_element(xml, &e)?;
                 }
                 b"visibility" => {
-                    let parse_flag = |v: Option<&[u8]>| {
-                        v.map(|v| matches!(v, b"1" | b"true"))
-                    };
+                    let parse_flag = |v: Option<&[u8]>| v.map(|v| matches!(v, b"1" | b"true"));
                     layout.connector_lines = parse_flag(e.raw_attr(b"connectorLines")?);
                     layout.mean_line = parse_flag(e.raw_attr(b"meanLine")?);
                     layout.mean_marker = parse_flag(e.raw_attr(b"meanMarker")?);
@@ -2824,7 +2832,12 @@ fn parse_cell_anchor<RS: BufRead>(
 mod tests {
     use super::*;
 
-    type BarCase = (&'static [u8], Option<&'static str>, Option<&'static str>, ChartType);
+    type BarCase = (
+        &'static [u8],
+        Option<&'static str>,
+        Option<&'static str>,
+        ChartType,
+    );
 
     fn resolve(
         tag: &[u8],
@@ -2841,23 +2854,91 @@ mod tests {
     #[test]
     fn resolve_bar_and_column_types() {
         let cases: &[BarCase] = &[
-            (b"barChart", Some("col"), Some("clustered"), ChartType::Column),
-            (b"barChart", Some("col"), Some("stacked"), ChartType::ColumnStacked),
-            (b"barChart", Some("col"), Some("percentStacked"), ChartType::ColumnPercentStacked),
+            (
+                b"barChart",
+                Some("col"),
+                Some("clustered"),
+                ChartType::Column,
+            ),
+            (
+                b"barChart",
+                Some("col"),
+                Some("stacked"),
+                ChartType::ColumnStacked,
+            ),
+            (
+                b"barChart",
+                Some("col"),
+                Some("percentStacked"),
+                ChartType::ColumnPercentStacked,
+            ),
             (b"barChart", Some("bar"), Some("clustered"), ChartType::Bar),
-            (b"barChart", Some("bar"), Some("stacked"), ChartType::BarStacked),
-            (b"barChart", Some("bar"), Some("percentStacked"), ChartType::BarPercentStacked),
-            (b"bar3DChart", Some("col"), Some("clustered"), ChartType::Column3D),
-            (b"bar3DChart", Some("col"), Some("stacked"), ChartType::Column3DStacked),
-            (b"bar3DChart", Some("col"), Some("percentStacked"), ChartType::Column3DPercentStacked),
-            (b"bar3DChart", Some("col"), Some("standard"), ChartType::Column3DStandard),
-            (b"bar3DChart", Some("bar"), Some("standard"), ChartType::Bar3DStandard),
-            (b"bar3DChart", Some("bar"), Some("clustered"), ChartType::Bar3D),
-            (b"bar3DChart", Some("bar"), Some("stacked"), ChartType::Bar3DStacked),
-            (b"bar3DChart", Some("bar"), Some("percentStacked"), ChartType::Bar3DPercentStacked),
+            (
+                b"barChart",
+                Some("bar"),
+                Some("stacked"),
+                ChartType::BarStacked,
+            ),
+            (
+                b"barChart",
+                Some("bar"),
+                Some("percentStacked"),
+                ChartType::BarPercentStacked,
+            ),
+            (
+                b"bar3DChart",
+                Some("col"),
+                Some("clustered"),
+                ChartType::Column3D,
+            ),
+            (
+                b"bar3DChart",
+                Some("col"),
+                Some("stacked"),
+                ChartType::Column3DStacked,
+            ),
+            (
+                b"bar3DChart",
+                Some("col"),
+                Some("percentStacked"),
+                ChartType::Column3DPercentStacked,
+            ),
+            (
+                b"bar3DChart",
+                Some("col"),
+                Some("standard"),
+                ChartType::Column3DStandard,
+            ),
+            (
+                b"bar3DChart",
+                Some("bar"),
+                Some("standard"),
+                ChartType::Bar3DStandard,
+            ),
+            (
+                b"bar3DChart",
+                Some("bar"),
+                Some("clustered"),
+                ChartType::Bar3D,
+            ),
+            (
+                b"bar3DChart",
+                Some("bar"),
+                Some("stacked"),
+                ChartType::Bar3DStacked,
+            ),
+            (
+                b"bar3DChart",
+                Some("bar"),
+                Some("percentStacked"),
+                ChartType::Bar3DPercentStacked,
+            ),
         ];
         for &(tag, dir, grouping, expected) in cases {
-            assert_eq!(resolve(tag, dir, grouping, None, None, None, false), expected);
+            assert_eq!(
+                resolve(tag, dir, grouping, None, None, None, false),
+                expected
+            );
         }
     }
 
@@ -2866,20 +2947,35 @@ mod tests {
         let cases: &[(&[u8], Option<&str>, ChartType)] = &[
             (b"lineChart", Some("standard"), ChartType::Line),
             (b"lineChart", Some("stacked"), ChartType::LineStacked),
-            (b"lineChart", Some("percentStacked"), ChartType::LinePercentStacked),
+            (
+                b"lineChart",
+                Some("percentStacked"),
+                ChartType::LinePercentStacked,
+            ),
             (b"line3DChart", Some("standard"), ChartType::Line3D),
             (b"areaChart", Some("standard"), ChartType::Area),
             (b"areaChart", Some("stacked"), ChartType::AreaStacked),
-            (b"areaChart", Some("percentStacked"), ChartType::AreaPercentStacked),
+            (
+                b"areaChart",
+                Some("percentStacked"),
+                ChartType::AreaPercentStacked,
+            ),
             (b"area3DChart", Some("standard"), ChartType::Area3D),
             (b"area3DChart", Some("stacked"), ChartType::Area3DStacked),
-            (b"area3DChart", Some("percentStacked"), ChartType::Area3DPercentStacked),
+            (
+                b"area3DChart",
+                Some("percentStacked"),
+                ChartType::Area3DPercentStacked,
+            ),
             (b"pieChart", None, ChartType::Pie),
             (b"pie3DChart", None, ChartType::Pie3D),
             (b"doughnutChart", None, ChartType::Doughnut),
         ];
         for &(tag, grouping, expected) in cases {
-            assert_eq!(resolve(tag, None, grouping, None, None, None, false), expected);
+            assert_eq!(
+                resolve(tag, None, grouping, None, None, None, false),
+                expected
+            );
         }
     }
 
@@ -2894,7 +2990,10 @@ mod tests {
             (None, ChartType::Scatter),
         ];
         for &(style, expected) in scatter {
-            assert_eq!(resolve(b"scatterChart", None, None, style, None, None, false), expected);
+            assert_eq!(
+                resolve(b"scatterChart", None, None, style, None, None, false),
+                expected
+            );
         }
 
         let radar: &[(Option<&str>, ChartType)] = &[
@@ -2903,11 +3002,20 @@ mod tests {
             (Some("filled"), ChartType::RadarFilled),
         ];
         for &(style, expected) in radar {
-            assert_eq!(resolve(b"radarChart", None, None, None, style, None, false), expected);
+            assert_eq!(
+                resolve(b"radarChart", None, None, None, style, None, false),
+                expected
+            );
         }
 
-        assert_eq!(resolve(b"stockChart", None, None, None, None, None, false), ChartType::Stock);
-        assert_eq!(resolve(b"bubbleChart", None, None, None, None, None, false), ChartType::Bubble);
+        assert_eq!(
+            resolve(b"stockChart", None, None, None, None, None, false),
+            ChartType::Stock
+        );
+        assert_eq!(
+            resolve(b"bubbleChart", None, None, None, None, None, false),
+            ChartType::Bubble
+        );
         assert_eq!(
             resolve(b"ofPieChart", None, None, None, None, Some("pie"), false),
             ChartType::PieOfPie
@@ -2916,7 +3024,10 @@ mod tests {
             resolve(b"ofPieChart", None, None, None, None, Some("bar"), false),
             ChartType::BarOfPie
         );
-        assert_eq!(resolve(b"surfaceChart", None, None, None, None, None, false), ChartType::Contour);
+        assert_eq!(
+            resolve(b"surfaceChart", None, None, None, None, None, false),
+            ChartType::Contour
+        );
         assert_eq!(
             resolve(b"surfaceChart", None, None, None, None, None, true),
             ChartType::ContourWireframe
@@ -2929,6 +3040,9 @@ mod tests {
             resolve(b"surface3DChart", None, None, None, None, None, true),
             ChartType::Surface3DWireframe
         );
-        assert_eq!(resolve(b"unknownChart", None, None, None, None, None, false), ChartType::Unknown);
+        assert_eq!(
+            resolve(b"unknownChart", None, None, None, None, None, false),
+            ChartType::Unknown
+        );
     }
 }

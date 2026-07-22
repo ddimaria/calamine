@@ -253,12 +253,7 @@ impl Chart {
     pub fn x_axis(&self) -> Option<&ChartAxis> {
         self.axes
             .iter()
-            .find(|a| {
-                matches!(
-                    a.axis_type,
-                    ChartAxisType::Category | ChartAxisType::Date
-                )
-            })
+            .find(|a| matches!(a.axis_type, ChartAxisType::Category | ChartAxisType::Date))
             .or_else(|| {
                 self.axes
                     .iter()
@@ -276,12 +271,10 @@ impl Chart {
             .iter()
             .filter(|a| a.axis_type == ChartAxisType::Value);
         let first = values.next();
-        let has_cat = self.axes.iter().any(|a| {
-            matches!(
-                a.axis_type,
-                ChartAxisType::Category | ChartAxisType::Date
-            )
-        });
+        let has_cat = self
+            .axes
+            .iter()
+            .any(|a| matches!(a.axis_type, ChartAxisType::Category | ChartAxisType::Date));
         if has_cat {
             first
         } else {

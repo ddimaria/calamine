@@ -241,6 +241,27 @@ pub struct Picture {
     pub name: String,
 }
 
+/// Freeze pane information for a worksheet.
+///
+/// Frozen panes (also known as freeze cells) keep a number of rows and/or
+/// columns visible while the rest of the worksheet scrolls. In the XLSX format
+/// this is stored per-worksheet as a `<pane>` element within
+/// `<sheetViews><sheetView>` with `state="frozen"` (or `"frozenSplit"`).
+///
+/// The property is defined in [ECMA-376 Part 1] 18.3.1.66 (`pane`).
+///
+/// [ECMA-376 Part 1]: https://www.ecma-international.org/publications-and-standards/standards/ecma-376/
+#[derive(Debug, Default, PartialEq, Eq, Hash, Ord, PartialOrd, Copy, Clone)]
+pub struct FreezePane {
+    /// Number of frozen columns (the `xSplit` attribute).
+    pub frozen_cols: u32,
+    /// Number of frozen rows (the `ySplit` attribute).
+    pub frozen_rows: u32,
+    /// Top-left visible cell of the scrolling (unfrozen) pane as a 0-indexed
+    /// `(row, column)`, parsed from the `topLeftCell` attribute if present.
+    pub top_left_cell: Option<(u32, u32)>,
+}
+
 /// Common file metadata
 ///
 /// Depending on file type, some extra information may be stored

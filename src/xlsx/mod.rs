@@ -8,9 +8,9 @@ mod cells_reader;
 mod chart_parser;
 mod style_parser;
 
-use std::collections::{BTreeMap, HashMap};
 #[cfg(feature = "picture")]
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::io::BufReader;
 use std::io::{Read, Seek};
 use std::str::FromStr;
@@ -43,8 +43,8 @@ use crate::vba::VbaProject;
 #[cfg(feature = "picture")]
 use crate::Picture;
 use crate::{
-    Cell, CellErrorType, Data, Dimensions, HeaderRow, Metadata, Range, Reader, ReaderRef, Sheet,
-    SheetType, SheetVisible, Style, Table,
+    Cell, CellErrorType, Data, Dimensions, FreezePane, HeaderRow, Metadata, Range, Reader,
+    ReaderRef, Sheet, SheetType, SheetVisible, Style, Table,
 };
 pub use cells_reader::{
     XlsxCellFormula, XlsxCellFormulaMetadataRecord, XlsxCellReader, XlsxFormulaMetadata,
@@ -400,11 +400,10 @@ impl<RS: Read + Seek> Xlsx<RS> {
         if let Some(palette) = &self.theme_palette {
             return palette.clone();
         }
-        let palette =
-            match xml_reader(&mut self.zip, "xl/theme/theme1.xml", &self.zip_path_cache) {
-                Some(Ok(mut xml)) => style_parser::read_theme_colors(&mut xml),
-                _ => style_parser::default_theme_colors(),
-            };
+        let palette = match xml_reader(&mut self.zip, "xl/theme/theme1.xml", &self.zip_path_cache) {
+            Some(Ok(mut xml)) => style_parser::read_theme_colors(&mut xml),
+            _ => style_parser::default_theme_colors(),
+        };
         self.theme_palette = Some(palette.clone());
         palette
     }
@@ -2508,6 +2507,117 @@ impl<RS: Read + Seek> Xlsx<RS> {
         self.merge_cells_by_sheet_name(&name)
     }
 
+    /// Get the freeze pane (frozen rows/columns) information for a worksheet,
+    /// by sheet name.
+    ///
+    /// Frozen panes keep a number of rows and/or columns visible while the
+    /// rest of the worksheet scrolls. The information is stored per-worksheet
+    /// as a `<pane>` element within `<sheetViews><sheetView>`, for example:
+    ///
+    /// ```xml
+    /// <pane xSplit="1" ySplit="2" topLeftCell="B3" activePane="bottomRight" state="frozen"/>
+    /// ```
+    ///
+    /// The function returns `Ok(Some(FreezePane))` if the worksheet has a pane
+    /// with a `state` of `"frozen"` or `"frozenSplit"`, and `Ok(None)` if the
+    /// worksheet has no pane, or has a non-frozen (`"split"`) pane.
+    ///
+    /// # Parameters
+    ///
+    /// - `name`: The name of the worksheet to get the freeze pane from.
+    ///
+    /// # Errors
+    ///
+    /// - [`XlsxError::WorksheetNotFound`].
+    /// - [`XlsxError::Xml`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use calamine::{open_workbook, Error, Xlsx};
+    ///
+    /// fn main() -> Result<(), Error> {
+    ///     let path = "tests/freeze_panes.xlsx";
+    ///
+    ///     // Open the workbook.
+    ///     let mut workbook: Xlsx<_> = open_workbook(path)?;
+    ///
+    ///     // Get the freeze pane information for a worksheet.
+    ///     if let Some(freeze_pane) = workbook.worksheet_freeze_panes("FrozenBoth")? {
+    ///         println!(
+    ///             "{} frozen rows, {} frozen columns",
+    ///             freeze_pane.frozen_rows, freeze_pane.frozen_cols
+    ///         );
+    ///     }
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// Output:
+    ///
+    /// ```text
+    /// 2 frozen rows, 1 frozen columns
+    /// ```
+    ///
+    pub fn worksheet_freeze_panes(&mut self, name: &str) -> Result<Option<FreezePane>, XlsxError> {
+        let (_, path) = self
+            .sheets
+            .iter()
+            .find(|&(n, _)| n == name)
+            .ok_or_else(|| XlsxError::WorksheetNotFound(name.into()))?;
+        let mut xml = xml_reader(&mut self.zip, path, &self.zip_path_cache)
+            .ok_or_else(|| XlsxError::WorksheetNotFound(name.into()))??;
+
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match xml.read_event_into(&mut buf) {
+                Ok(Event::Start(event)) if event.local_name().as_ref() == b"pane" => {
+                    return read_freeze_pane(&event);
+                }
+                // In the worksheet schema `<sheetViews>` always precedes
+                // `<sheetData>` so we can stop scanning early.
+                Ok(Event::End(event)) if event.local_name().as_ref() == b"sheetViews" => break,
+                Ok(Event::Start(event)) if event.local_name().as_ref() == b"sheetData" => break,
+                Ok(Event::Eof) => break,
+                Err(e) => return Err(XlsxError::Xml(e)),
+                _ => (),
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Get the freeze pane (frozen rows/columns) information for a worksheet,
+    /// by sheet index.
+    ///
+    /// This is an index based version of [`Xlsx::worksheet_freeze_panes()`],
+    /// see that method for details. It returns `None` if the sheet index is
+    /// out of range.
+    ///
+    /// # Parameters
+    ///
+    /// - `sheet_index`: The zero index of the worksheet to get the freeze pane
+    ///   from.
+    ///
+    /// # Errors
+    ///
+    /// - [`XlsxError::Xml`].
+    ///
+    pub fn worksheet_freeze_panes_at(
+        &mut self,
+        sheet_index: usize,
+    ) -> Option<Result<Option<FreezePane>, XlsxError>> {
+        let name = self
+            .metadata()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| sheet.name.clone())?;
+
+        Some(self.worksheet_freeze_panes(&name))
+    }
+
     /// Get the hyperlinks defined on a worksheet by sheet name.
     ///
     /// Hyperlinks in Excel can point to external URLs, email addresses, files,
@@ -3025,11 +3135,11 @@ impl<RS: Read + Seek> Xlsx<RS> {
             // Drawing rels: rId -> (chart part path, is chart-ex part).
             let mut rid_to_chart: HashMap<String, (String, bool)> = HashMap::new();
             {
-                let mut xml =
-                    match xml_reader(&mut self.zip, &draw_rel_path, &self.zip_path_cache) {
-                        None => continue,
-                        Some(x) => x?,
-                    };
+                let mut xml = match xml_reader(&mut self.zip, &draw_rel_path, &self.zip_path_cache)
+                {
+                    None => continue,
+                    Some(x) => x?,
+                };
                 let mut buf = Vec::with_capacity(64);
                 loop {
                     buf.clear();
@@ -3064,8 +3174,7 @@ impl<RS: Read + Seek> Xlsx<RS> {
 
             // Drawing XML: anchors with embedded chart references.
             let chart_refs = {
-                let mut xml = match xml_reader(&mut self.zip, &drawing_path, &self.zip_path_cache)
-                {
+                let mut xml = match xml_reader(&mut self.zip, &drawing_path, &self.zip_path_cache) {
                     None => continue,
                     Some(x) => x?,
                 };
@@ -4691,6 +4800,52 @@ where
     }
 
     Ok(merge_cells)
+}
+
+/// Parse a `<pane>` element from a worksheet `<sheetView>`.
+///
+/// Returns `Some(FreezePane)` if the pane state is `"frozen"` or
+/// `"frozenSplit"`, and `None` for a non-frozen (`"split"`, the default) pane.
+fn read_freeze_pane(event: &BytesStart<'_>) -> Result<Option<FreezePane>, XlsxError> {
+    let mut frozen_cols = 0u32;
+    let mut frozen_rows = 0u32;
+    let mut top_left_cell = None;
+    let mut frozen = false;
+
+    for attribute in event.attributes() {
+        let attribute = attribute?;
+
+        match attribute.key.local_name().as_ref() {
+            b"xSplit" => frozen_cols = parse_pane_split(&attribute.value)?,
+            b"ySplit" => frozen_rows = parse_pane_split(&attribute.value)?,
+            b"topLeftCell" => top_left_cell = Some(get_row_column(&attribute.value)?),
+            b"state" => {
+                let value: &[u8] = &attribute.value;
+                frozen = value == b"frozen" || value == b"frozenSplit";
+            }
+            _ => (),
+        }
+    }
+
+    if frozen {
+        Ok(Some(FreezePane {
+            frozen_cols,
+            frozen_rows,
+            top_left_cell,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Parse an `xSplit`/`ySplit` pane attribute value.
+///
+/// The schema type is a double, but for frozen panes the value is a whole
+/// number of columns/rows.
+fn parse_pane_split(value: &[u8]) -> Result<u32, XlsxError> {
+    let value = std::str::from_utf8(value)
+        .map_err(|_| XlsxError::Unexpected("invalid utf8 in pane split attribute"))?;
+    Ok(value.parse::<f64>()? as u32)
 }
 
 #[derive(Debug, Copy, Clone)]
