@@ -28,8 +28,8 @@ use crate::utils::{
 };
 use crate::vba::VbaProject;
 use crate::{
-    Cell, Data, HeaderRow, Metadata, Range, Reader, ReaderRef, Sheet, SheetType, SheetVisible,
-    StyleRange, WorksheetLayout,
+    Cell, Data, FreezePane, HeaderRow, Metadata, Range, Reader, ReaderRef, Sheet, SheetType,
+    SheetVisible, StyleRange, WorksheetLayout,
 };
 
 /// A Xlsb specific error
@@ -435,6 +435,68 @@ impl<RS: Read + Seek> Xlsb<RS> {
         )
     }
 
+    /// Get the freeze pane (frozen rows/columns) information for a worksheet,
+    /// by sheet name.
+    ///
+    /// The information is parsed from the `BrtPane` record ([MS-XLSB]
+    /// 2.4.723) of the worksheet binary part. Returns `Ok(Some(FreezePane))`
+    /// if the worksheet has a frozen pane, and `Ok(None)` if it has no pane
+    /// or a non-frozen (split) pane.
+    ///
+    /// # Parameters
+    ///
+    /// - `name`: The name of the worksheet to get the freeze pane from.
+    ///
+    /// # Errors
+    ///
+    /// - [`XlsbError::WorksheetNotFound`].
+    pub fn worksheet_freeze_panes(&mut self, name: &str) -> Result<Option<FreezePane>, XlsbError> {
+        let path = match self.sheets.iter().find(|&(n, _)| n == name) {
+            Some((_, path)) => path.clone(),
+            None => return Err(XlsbError::WorksheetNotFound(name.into())),
+        };
+        let mut iter = RecordIter::from_zip(&mut self.zip, &path, &self.zip_path_cache)?;
+        let mut buf = Vec::with_capacity(64);
+
+        loop {
+            match iter.read_type() {
+                Ok(typ) => {
+                    let _ = iter.fill_buffer(&mut buf)?;
+                    match typ {
+                        // BrtPane
+                        0x0097 => return Ok(parse_pane(&buf)),
+                        // BrtBeginSheetData: views always precede cell data,
+                        // so stop scanning early.
+                        0x0091 => return Ok(None),
+                        _ => (),
+                    }
+                }
+                // Reached the end of the part without a BrtPane record.
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+                Err(e) => return Err(XlsbError::Io(e)),
+            }
+        }
+    }
+
+    /// Get the freeze pane (frozen rows/columns) information for a worksheet,
+    /// by sheet index.
+    ///
+    /// This is an index based version of [`Xlsb::worksheet_freeze_panes()`],
+    /// see that method for details. It returns `None` if the sheet index is
+    /// out of range.
+    pub fn worksheet_freeze_panes_at(
+        &mut self,
+        sheet_index: usize,
+    ) -> Option<Result<Option<FreezePane>, XlsbError>> {
+        let name = self
+            .metadata()
+            .sheets
+            .get(sheet_index)
+            .map(|sheet| sheet.name.clone())?;
+
+        Some(self.worksheet_freeze_panes(&name))
+    }
+
     #[cfg(feature = "picture")]
     fn read_pictures(&mut self) -> Result<(), XlsbError> {
         let mut pics = Vec::new();
@@ -717,6 +779,40 @@ where
             }
         }
     }
+}
+
+/// Parse a `BrtPane` record ([MS-XLSB] 2.4.723).
+///
+/// The record layout is: `xnumXSplit` (8 bytes, Xnum/f64), `xnumYSplit`
+/// (8 bytes, Xnum/f64), `rwTop` (4 bytes), `colLeft` (4 bytes), `pnnAct`
+/// (4 bytes) and 1 byte of flags where bit 0 is `fFrozen` and bit 1 is
+/// `fFrozenNoSplit`.
+///
+/// When one of the frozen flags is set, the split values are the number of
+/// frozen columns/rows (same semantics as the `xSplit`/`ySplit` attributes in
+/// XLSX). For a non-frozen split they are positions in twips and `None` is
+/// returned.
+fn parse_pane(buf: &[u8]) -> Option<FreezePane> {
+    if buf.len() < 29 {
+        return None;
+    }
+
+    let flags = buf[28];
+    let frozen = flags & 0b0000_0011 != 0; // fFrozen or fFrozenNoSplit
+    if !frozen {
+        return None;
+    }
+
+    let x_split = read_f64(buf);
+    let y_split = read_f64(&buf[8..]);
+    let rw_top = read_u32(&buf[16..]);
+    let col_left = read_u32(&buf[20..]);
+
+    Some(FreezePane {
+        frozen_cols: x_split as u32,
+        frozen_rows: y_split as u32,
+        top_left_cell: Some((rw_top, col_left)),
+    })
 }
 
 fn wide_str<'a>(buf: &'a [u8], str_len: &mut usize) -> Result<Cow<'a, str>, XlsbError> {

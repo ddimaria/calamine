@@ -19,8 +19,8 @@ use crate::utils::read_usize;
 use crate::utils::{push_column, read_f64, read_i16, read_i32, read_u16, read_u32};
 use crate::vba::VbaProject;
 use crate::{
-    Cell, CellErrorType, Data, Dimensions, HeaderRow, Metadata, Range, Reader, Sheet, SheetType,
-    SheetVisible, StyleRange, WorksheetLayout,
+    Cell, CellErrorType, Data, Dimensions, FreezePane, HeaderRow, Metadata, Range, Reader, Sheet,
+    SheetType, SheetVisible, StyleRange, WorksheetLayout,
 };
 
 #[derive(Debug)]
@@ -156,6 +156,7 @@ struct SheetData {
     range: Range<Data>,
     formula: Range<String>,
     merge_cells: Vec<Dimensions>,
+    freeze_pane: Option<FreezePane>,
 }
 
 /// A struct representing an old xls format file (CFB)
@@ -370,6 +371,27 @@ impl<RS: Read + Seek> Xls<RS> {
             .ok_or_else(|| XlsError::WorksheetNotFound(format!("Sheet index {id} out of range")))?;
 
         self.merge_cells_by_sheet_name(&name)
+    }
+
+    /// Get the freeze pane (frozen rows/columns) information for a worksheet,
+    /// by sheet name.
+    ///
+    /// The information is parsed from the `Pane` and `Window2` records of the
+    /// worksheet substream. Returns `None` if the worksheet doesn't exist, has
+    /// no pane, or has a non-frozen (split) pane.
+    pub fn worksheet_freeze_panes(&self, name: &str) -> Option<FreezePane> {
+        self.sheets.get(name).and_then(|r| r.freeze_pane)
+    }
+
+    /// Get the freeze pane (frozen rows/columns) information for a worksheet,
+    /// by sheet index.
+    ///
+    /// This is an index based version of [`Xls::worksheet_freeze_panes()`],
+    /// see that method for details.
+    pub fn worksheet_freeze_panes_at(&self, n: usize) -> Option<FreezePane> {
+        let sheet = self.metadata().sheets.get(n)?;
+
+        self.worksheet_freeze_panes(&sheet.name)
     }
 
     /// Check if the workbook uses the 1904 date system.
@@ -619,6 +641,8 @@ impl<RS: Read + Seek> Xls<RS> {
             let mut formulas = Vec::new();
             let mut fmla_pos = (0, 0);
             let mut merge_cells = Vec::new();
+            let mut pane = None;
+            let mut is_frozen = false;
             for record in records {
                 let r = record?;
                 match r.typ {
@@ -643,7 +667,13 @@ impl<RS: Read + Seek> Xls<RS> {
                     0x00FD => cells.extend(parse_label_sst(r.data, &strings)?), // LabelSst
                     0x00BD => parse_mul_rk(r.data, &mut cells, &self.formats, self.is_1904)?, // 189: MulRk
                     0x00E5 => parse_merge_cells(r.data, &mut merge_cells)?, // 229: Merge Cells
-                    0x000A => break,                                        // 10: EOF,
+                    // 574: Window2 (MS-XLS 2.4.346), bit 3 of the flags = fFrozen
+                    0x023E if r.data.len() >= 2 => {
+                        is_frozen = read_u16(r.data) & 0x0008 != 0;
+                    }
+                    // 65: Pane (MS-XLS 2.4.194)
+                    0x0041 => pane = parse_pane(r.data)?,
+                    0x000A => break, // 10: EOF,
                     0x0006 => {
                         // 6: Formula
                         if r.data.len() < 20 {
@@ -692,6 +722,7 @@ impl<RS: Read + Seek> Xls<RS> {
                     range,
                     formula,
                     merge_cells,
+                    freeze_pane: if is_frozen { pane } else { None },
                 },
             );
         }
@@ -923,6 +954,37 @@ fn parse_merge_cells(r: &[u8], merge_cells: &mut Vec<Dimensions>) -> Result<(), 
     }
 
     Ok(())
+}
+
+/// Parse a `Pane` record (MS-XLS 2.4.194).
+///
+/// The record layout is: `px` (2 bytes, columns left of the vertical split),
+/// `py` (2 bytes, rows above the horizontal split), `rwTop` (2 bytes, first
+/// visible row of the bottom pane), `colLeft` (2 bytes, first visible column
+/// of the right pane) and `pnnAcct` (1 byte, active pane).
+///
+/// For frozen panes (`Window2` record with the `fFrozen` flag set) `px`/`py`
+/// are the number of frozen columns/rows. For non-frozen splits they are
+/// positions in 1/20 of a point and the caller must ignore this record.
+fn parse_pane(r: &[u8]) -> Result<Option<FreezePane>, XlsError> {
+    if r.len() < 8 {
+        return Err(XlsError::Len {
+            expected: 8,
+            found: r.len(),
+            typ: "Pane",
+        });
+    }
+
+    let px = read_u16(r);
+    let py = read_u16(&r[2..]);
+    let rw_top = read_u16(&r[4..]);
+    let col_left = read_u16(&r[6..]);
+
+    Ok(Some(FreezePane {
+        frozen_cols: px.into(),
+        frozen_rows: py.into(),
+        top_left_cell: Some((rw_top.into(), col_left.into())),
+    }))
 }
 
 fn parse_mul_rk(
