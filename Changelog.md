@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- XLSX row streaming: `XlsxCellReader::next_row()` and
+  `XlsxCellReader::next_cell_full()` yield cached value, expanded formula
+  text, and style in one SAX pass. `Xlsx::worksheet_dimensions()` returns
+  the sheet `dimension` attribute without building a dense `Range`.
+  `Dimensions` also exposes `width()` / `height()`.
+
 ## [0.36.0] - 2026-07-06
 
 ### Added
