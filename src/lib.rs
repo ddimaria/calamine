@@ -139,7 +139,8 @@ pub use crate::xls::{Xls, XlsError, XlsOptions};
 pub use crate::xlsb::{Xlsb, XlsbError};
 pub use crate::xlsx::{
     expand_shared_formula, expand_shared_formula_into, Hyperlink, Xlsx, XlsxCellFormula,
-    XlsxCellFormulaMetadataRecord, XlsxCellReader, XlsxError, XlsxFormulaMetadata,
+    XlsxCellFormulaMetadataRecord, XlsxCellReader, XlsxError, XlsxFormulaMetadata, XlsxStreamCell,
+    XlsxStreamRow,
 };
 
 use crate::vba::VbaProject;
@@ -204,6 +205,16 @@ impl Dimensions {
     /// len
     pub fn len(&self) -> u64 {
         (self.end.0 - self.start.0 + 1) as u64 * (self.end.1 - self.start.1 + 1) as u64
+    }
+
+    /// Number of rows in this span.
+    pub fn height(&self) -> u32 {
+        self.end.0.saturating_sub(self.start.0).saturating_add(1)
+    }
+
+    /// Number of columns in this span.
+    pub fn width(&self) -> u32 {
+        self.end.1.saturating_sub(self.start.1).saturating_add(1)
     }
 }
 

@@ -48,6 +48,7 @@ use crate::{
 };
 pub use cells_reader::{
     XlsxCellFormula, XlsxCellFormulaMetadataRecord, XlsxCellReader, XlsxFormulaMetadata,
+    XlsxStreamCell, XlsxStreamRow,
 };
 
 pub(crate) type XlReader<'a, RS> = XmlReader<BufReader<ZipFile<'a, RS>>>;
@@ -3030,7 +3031,7 @@ impl<RS: Read + Seek> Xlsx<RS> {
         };
 
         let dxf_styles = &self.dxf_styles;
-        parse_conditional_formattings(&mut xml, dxf_styles, &theme_colors)
+        parse_conditional_formatting(&mut xml, dxf_styles, &theme_colors)
     }
 
     /// Get the conditional formatting rules for a worksheet by sheet index.
@@ -3521,6 +3522,19 @@ impl<RS: Read + Seek> Xlsx<RS> {
         let styles = &self.styles;
         XlsxCellReader::new(xml, strings, formats, styles, is_1904)
     }
+
+    /// Return the worksheet used-range declared by the sheet `dimension`
+    /// attribute, without materializing cells.
+    ///
+    /// This is the cheap size-guard path: it opens the sheet XML, reads
+    /// through `<dimension>` / up to `<sheetData>`, and stops. Use
+    /// [`Self::worksheet_cells_reader`] when you also need to stream rows.
+    ///
+    /// If the sheet omits `dimension`, the reader default `(0, 0)–(0, 0)`
+    /// is returned (same as [`XlsxCellReader::dimensions`]).
+    pub fn worksheet_dimensions(&mut self, name: &str) -> Result<Dimensions, XlsxError> {
+        Ok(self.worksheet_cells_reader(name)?.dimensions())
+    }
 }
 
 impl<RS: Read + Seek> Reader<RS> for Xlsx<RS> {
@@ -3780,7 +3794,7 @@ fn parse_dxf_num_fmt<RS: std::io::BufRead>(
 }
 
 /// Parse all `<conditionalFormatting>` blocks from a worksheet XML reader.
-fn parse_conditional_formattings<RS: std::io::BufRead>(
+fn parse_conditional_formatting<RS: std::io::BufRead>(
     xml: &mut XmlReader<RS>,
     dxf_styles: &[Style],
     theme_colors: &[Color],

@@ -2262,6 +2262,53 @@ fn xlsx_cell_reader_reports_excel_resaved_shared_formula_metadata() {
 }
 
 #[test]
+fn xlsx_worksheet_dimensions_matches_range_size() {
+    let mut excel: Xlsx<_> = wb("shared_formula_simple.xlsx");
+    let dims = excel.worksheet_dimensions("Sheet1").unwrap();
+    let range = excel.worksheet_range("Sheet1").unwrap();
+    assert_eq!(dims.start, range.start().unwrap());
+    assert_eq!(dims.end, range.end().unwrap());
+    assert_eq!(
+        (dims.height() as usize, dims.width() as usize),
+        range.get_size()
+    );
+}
+
+#[test]
+fn xlsx_next_row_groups_cells_and_expands_formulas() {
+    let mut excel: Xlsx<_> = wb("shared_formula_simple.xlsx");
+    let mut reader = excel.worksheet_cells_reader("Sheet1").unwrap();
+
+    let row0 = reader.next_row().unwrap().unwrap();
+    assert_eq!(row0.index, 0);
+    assert_eq!(row0.cells[0].pos, (0, 0));
+    assert_eq!(row0.cells[0].value, DataRef::Float(1.0));
+    assert_eq!(row0.cells[0].formula, None);
+    assert_eq!(row0.cells[1].formula.as_deref(), Some("A1*2"));
+
+    let row1 = reader.next_row().unwrap().unwrap();
+    assert_eq!(row1.index, 1);
+    assert_eq!(row1.cells[1].formula.as_deref(), Some("A2*2"));
+
+    let row2 = reader.next_row().unwrap().unwrap();
+    assert_eq!(row2.index, 2);
+    assert_eq!(row2.cells[1].value, DataRef::Float(6.0));
+    assert_eq!(row2.cells[1].formula.as_deref(), Some("A3*2"));
+
+    assert!(reader.next_row().unwrap().is_none());
+}
+
+#[test]
+fn xlsx_next_cell_full_includes_style() {
+    let mut excel: Xlsx<_> = wb("styles.xlsx");
+    let mut reader = excel.worksheet_cells_reader("Sheet 1").unwrap();
+    let a1 = reader.next_cell_full().unwrap().unwrap();
+    assert_eq!(a1.pos, (0, 0));
+    let font = a1.style.as_ref().and_then(|s| s.get_font());
+    assert!(font.is_some_and(|f| f.is_bold()), "A1 should be bold");
+}
+
+#[test]
 fn xlsx_worksheet_formula_expands_excel_resaved_shared_formulas() {
     let mut excel: Xlsx<_> = wb("shared_formula_simple.xlsx");
     let formula = excel.worksheet_formula("Sheet1").unwrap();

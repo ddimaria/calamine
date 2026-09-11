@@ -162,6 +162,37 @@ pub struct XlsxCellFormulaMetadataRecord<'a> {
     pub formula: Option<XlsxFormulaMetadata>,
 }
 
+/// One XLSX cell from a single SAX pass: cached value, formula text, and style.
+///
+/// Prefer this (or [`XlsxCellReader::next_row`]) over mixing
+/// [`XlsxCellReader::next_cell`] and [`XlsxCellReader::next_cell_with_formula`]
+/// on the same reader — those methods share one XML stream.
+#[derive(Clone, Debug, PartialEq)]
+pub struct XlsxStreamCell<'a> {
+    /// Zero-based `(row, column)` cell position.
+    pub pos: (u32, u32),
+    /// Literal or cached value associated with the cell.
+    pub value: DataRef<'a>,
+    /// Formula text, expanded for shared formulas when the shared-formula
+    /// anchor has already been observed in stream order.
+    pub formula: Option<String>,
+    /// Resolved style when the cell references a workbook style.
+    pub style: Option<Style>,
+}
+
+/// Sparse cells from one `<row>` element, in XML order.
+///
+/// Rows omitted from `sheetData` are not yielded. Use
+/// [`XlsxCellReader::dimensions`] (or [`crate::Xlsx::worksheet_dimensions`])
+/// for the declared used range when counting empty rows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct XlsxStreamRow<'a> {
+    /// Zero-based row index from the `r` attribute (or the inferred index).
+    pub index: u32,
+    /// Cells present in this row. Gaps between columns are not padded.
+    pub cells: Vec<XlsxStreamCell<'a>>,
+}
+
 struct XlsxCellFormulaMetadataRecordInternal<'a> {
     pos: (u32, u32),
     value: DataRef<'a>,
@@ -253,6 +284,72 @@ where
     /// Return the worksheet dimensions declared by the sheet XML.
     pub fn dimensions(&self) -> Dimensions {
         self.dimensions
+    }
+
+    fn style_from_id(&self, style_id: usize) -> Option<Style> {
+        if style_id < self.styles.len() {
+            let mut style = self.styles[style_id].clone();
+            style.style_id = Some(style_id as u32);
+            Some(style)
+        } else {
+            None
+        }
+    }
+
+    /// Read one `<c>` element's value, formula, and style. Attribute
+    /// slices must not borrow `self.buf` (copy them first).
+    fn read_stream_cell(
+        &mut self,
+        pos: (u32, u32),
+        style_id: usize,
+        style_attr: Option<&[u8]>,
+        type_attr: Option<&[u8]>,
+        expand_shared_derived: bool,
+    ) -> Result<XlsxStreamCell<'a>, XlsxError> {
+        let style = self.style_from_id(style_id);
+        let mut value = DataRef::Empty;
+        let mut formula = None;
+        loop {
+            self.cell_buf.clear();
+            match self.xml.read_event_into(&mut self.cell_buf) {
+                Ok(Event::Start(e)) if e.local_name().as_ref() == b"f" => {
+                    formula = Self::read_formula_record(
+                        &mut self.xml,
+                        &mut self.formulas,
+                        &e,
+                        pos,
+                        expand_shared_derived,
+                    )?
+                    .and_then(|record| record.formula_text().map(str::to_string));
+                }
+                Ok(Event::Start(e)) => {
+                    let ctx = WorkbookContext {
+                        strings: self.strings,
+                        formats: self.formats,
+                        is_1904: self.is_1904,
+                    };
+                    value = read_value(
+                        &ctx,
+                        &mut self.xml,
+                        &e,
+                        style_attr,
+                        type_attr,
+                        &mut self.value_bufs,
+                    )?;
+                }
+                Ok(Event::End(e)) if e.local_name().as_ref() == b"c" => break,
+                Ok(Event::Eof) => return Err(XlsxError::XmlEof("c")),
+                Err(e) => return Err(XlsxError::Xml(e)),
+                _ => (),
+            }
+        }
+        self.col_index += 1;
+        Ok(XlsxStreamCell {
+            pos,
+            value,
+            formula,
+            style,
+        })
     }
 
     /// Return the next cell value in XML stream order.
@@ -429,6 +526,117 @@ where
                 value: record.value,
                 formula: record.formula.map(FormulaMetadata::into_metadata),
             }))
+    }
+
+    /// Return the next cell with cached value, expanded formula text, and
+    /// style in one XML pass.
+    pub fn next_cell_full(&mut self) -> Result<Option<XlsxStreamCell<'a>>, XlsxError> {
+        loop {
+            self.buf.clear();
+            match self.xml.read_event_into(&mut self.buf) {
+                Ok(Event::Start(row_element)) if row_element.local_name().as_ref() == b"row" => {
+                    if let Some(r) = row_element.raw_attr(b"r")? {
+                        self.row_index = get_row(r)?;
+                    }
+                }
+                Ok(Event::End(row_element)) if row_element.local_name().as_ref() == b"row" => {
+                    self.row_index += 1;
+                    self.col_index = 0;
+                }
+                Ok(Event::Start(c_element)) if c_element.local_name().as_ref() == b"c" => {
+                    let (pos_attr, style_attr, type_attr) =
+                        get_attrs!(c_element, b"r" => r, b"s" => s, b"t" => t)?;
+                    let pos = if let Some(range) = pos_attr {
+                        let (row, col) = get_row_column(range)?;
+                        self.col_index = col;
+                        (row, col)
+                    } else {
+                        (self.row_index, self.col_index)
+                    };
+                    let style_id = style_attr
+                        .and_then(|s| atoi_simd::parse::<usize, true, false>(s).ok())
+                        .unwrap_or(0);
+                    let style_owned = style_attr.map(|s| s.to_vec());
+                    let type_owned = type_attr.map(|t| t.to_vec());
+                    return Ok(Some(self.read_stream_cell(
+                        pos,
+                        style_id,
+                        style_owned.as_deref(),
+                        type_owned.as_deref(),
+                        true,
+                    )?));
+                }
+                Ok(Event::End(e)) if e.local_name().as_ref() == b"sheetData" => {
+                    return Ok(None);
+                }
+                Ok(Event::Eof) => return Err(XlsxError::XmlEof("sheetData")),
+                Err(e) => return Err(XlsxError::Xml(e)),
+                _ => (),
+            }
+        }
+    }
+
+    /// Return the next `<row>` as a sparse list of cells (value + formula +
+    /// style). Empty rows that still appear in the XML are yielded with
+    /// `cells` empty. Rows omitted from `sheetData` are skipped.
+    pub fn next_row(&mut self) -> Result<Option<XlsxStreamRow<'a>>, XlsxError> {
+        let mut cells = Vec::new();
+        let mut index = None;
+        loop {
+            self.buf.clear();
+            match self.xml.read_event_into(&mut self.buf) {
+                Ok(Event::Start(row_element)) if row_element.local_name().as_ref() == b"row" => {
+                    if let Some(r) = row_element.raw_attr(b"r")? {
+                        self.row_index = get_row(r)?;
+                    }
+                    index = Some(self.row_index);
+                }
+                Ok(Event::End(row_element)) if row_element.local_name().as_ref() == b"row" => {
+                    let index = index.unwrap_or(self.row_index);
+                    self.row_index += 1;
+                    self.col_index = 0;
+                    return Ok(Some(XlsxStreamRow { index, cells }));
+                }
+                Ok(Event::Start(c_element)) if c_element.local_name().as_ref() == b"c" => {
+                    let (pos_attr, style_attr, type_attr) =
+                        get_attrs!(c_element, b"r" => r, b"s" => s, b"t" => t)?;
+                    let pos = if let Some(range) = pos_attr {
+                        let (row, col) = get_row_column(range)?;
+                        self.col_index = col;
+                        (row, col)
+                    } else {
+                        (self.row_index, self.col_index)
+                    };
+                    if index.is_none() {
+                        index = Some(pos.0);
+                    }
+                    let style_id = style_attr
+                        .and_then(|s| atoi_simd::parse::<usize, true, false>(s).ok())
+                        .unwrap_or(0);
+                    let style_owned = style_attr.map(|s| s.to_vec());
+                    let type_owned = type_attr.map(|t| t.to_vec());
+                    cells.push(self.read_stream_cell(
+                        pos,
+                        style_id,
+                        style_owned.as_deref(),
+                        type_owned.as_deref(),
+                        true,
+                    )?);
+                }
+                Ok(Event::End(e)) if e.local_name().as_ref() == b"sheetData" => {
+                    if cells.is_empty() && index.is_none() {
+                        return Ok(None);
+                    }
+                    return Ok(Some(XlsxStreamRow {
+                        index: index.unwrap_or(self.row_index),
+                        cells,
+                    }));
+                }
+                Ok(Event::Eof) => return Err(XlsxError::XmlEof("sheetData")),
+                Err(e) => return Err(XlsxError::Xml(e)),
+                _ => (),
+            }
+        }
     }
 
     fn next_cell_formula_record_impl(
