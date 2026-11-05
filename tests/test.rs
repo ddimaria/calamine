@@ -3876,12 +3876,20 @@ fn test_xlsx_inline_str_with_value() {
     // extraneous v nodes should be ignored for inlineStr cells
     let mut wb: Xlsx<_> = wb("inlineStr_with_value.xlsx");
     let range = wb.worksheet_range_at(0).unwrap().unwrap();
-    assert_eq!(range.get_value((0, 4)), Some(&String("ID".to_string())));
+    // the inline strings carry formatted runs, so they are kept as rich text
+    let e1 = range.get_value((0, 4)).unwrap();
+    assert!(e1.is_rich_text());
+    assert_eq!(e1.as_string().as_deref(), Some("ID"));
+    let e2 = range.get_value((1, 4)).unwrap();
+    assert!(e2.is_rich_text());
+    assert_eq!(e2.as_string().as_deref(), Some("RQ11610"));
     assert_eq!(
-        range.get_value((1, 4)),
-        Some(&String("RQ11610".to_string()))
+        range
+            .get_value((1, 3))
+            .and_then(|d| d.as_string())
+            .as_deref(),
+        Some("1.")
     );
-    assert_eq!(range.get_value((1, 3)), Some(&String("1.".to_string())));
 }
 
 // Test for issue #648 where a inlineStr string contains CDATA.
@@ -5827,4 +5835,86 @@ fn test_chart_space_flags() {
     // The pie chart deleted its automatic title.
     assert_eq!(charts[3].auto_title_deleted, Some(true));
     assert!(charts[3].title.is_none());
+}
+
+#[test]
+fn test_xlsx_inline_str_rich_text() {
+    let mut xlsx: Xlsx<_> = wb("excel_parity_fixes.xlsx");
+    let range = xlsx.worksheet_range("Sheet1").unwrap();
+
+    match range.get_value((0, 0)) {
+        Some(Data::RichText(rt)) => {
+            assert_eq!(rt.plain_text(), "Bold plain");
+            assert_eq!(rt.runs.len(), 2);
+            assert_eq!(rt.runs[0].text, "Bold");
+            assert_eq!(
+                rt.runs[0].font.as_ref().map(|f| f.weight),
+                Some(calamine::FontWeight::Bold)
+            );
+            assert_eq!(rt.runs[1].text, " plain");
+            assert_ne!(
+                rt.runs[1].font.as_ref().map(|f| f.weight),
+                Some(calamine::FontWeight::Bold)
+            );
+        }
+        other => panic!("expected rich text, got {other:?}"),
+    }
+    // an inline string without formatting runs stays a plain string
+    assert_eq!(range.get_value((0, 1)), Some(&String("plain".to_string())));
+}
+
+#[test]
+fn test_xlsx_inline_str_rich_text_ref() {
+    let mut xlsx: Xlsx<_> = wb("excel_parity_fixes.xlsx");
+    let range = xlsx.worksheet_range_ref("Sheet1").unwrap();
+
+    let cell = range.get_value((0, 0)).unwrap();
+    assert!(cell.is_rich_text());
+    assert_eq!(cell.as_string().as_deref(), Some("Bold plain"));
+    assert_eq!(cell.get_rich_text().map(|rt| rt.runs.len()), Some(2));
+    assert_eq!(
+        range.get_value((0, 1)),
+        Some(&DataRef::String("plain".to_string()))
+    );
+}
+
+#[test]
+fn test_xlsx_medium_dash_dot_borders() {
+    let mut xlsx: Xlsx<_> = wb("excel_parity_fixes.xlsx");
+    let styles = xlsx.worksheet_style("Sheet1").unwrap();
+    // C1 is the only styled cell, so the style range starts there
+    assert_eq!(styles.start(), Some((0, 2)));
+    let borders = styles
+        .get((0, 0))
+        .and_then(|s| s.borders.as_ref())
+        .expect("C1 should have borders");
+    assert_eq!(borders.left.style, BorderStyle::MediumDashDot);
+    assert_eq!(borders.right.style, BorderStyle::MediumDashDotDot);
+
+    // C1 uses cellXfs index 1
+    let ids: Vec<_> = styles
+        .cells_with_ids()
+        .map(|(r, c, id, _)| (r, c, id))
+        .collect();
+    assert_eq!(ids, vec![(0, 0, 1)]);
+}
+
+#[test]
+fn test_xlsx_layout_column_and_row_default_styles() {
+    let mut xlsx: Xlsx<_> = wb("excel_parity_fixes.xlsx");
+    let layout = xlsx.worksheet_layout("Sheet1").unwrap();
+
+    let col_b = layout.column_widths.get(&1).expect("column B layout");
+    assert_eq!(col_b.style, Some(2));
+    assert_eq!(
+        xlsx.styles[2].font.as_ref().map(|f| f.weight),
+        Some(calamine::FontWeight::Bold)
+    );
+
+    let row_1 = layout.row_heights.get(&0).expect("row 1 layout");
+    assert_eq!(row_1.style, Some(3));
+    assert!(xlsx.styles[3].fill.is_some());
+
+    // `s` without `customFormat` is not a row default style
+    assert_eq!(layout.row_heights.get(&1).and_then(|r| r.style), None);
 }

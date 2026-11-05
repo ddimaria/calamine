@@ -2857,6 +2857,7 @@ impl<RS: Read + Seek> Xlsx<RS> {
                             let mut custom_width = false;
                             let mut hidden = false;
                             let mut best_fit = false;
+                            let mut style = None;
 
                             for attr in col_e.attributes() {
                                 let attr = attr.map_err(XlsxError::XmlAttr)?;
@@ -2891,6 +2892,11 @@ impl<RS: Read + Seek> Xlsx<RS> {
                                     b"bestFit" => {
                                         best_fit = &*attr.value != b"0";
                                     }
+                                    b"style" => {
+                                        if let Ok(style_str) = xml.decoder().decode(&attr.value) {
+                                            style = style_str.parse::<usize>().ok();
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -2901,7 +2907,8 @@ impl<RS: Read + Seek> Xlsx<RS> {
                                     let column_width = ColumnWidth::new(col, width)
                                         .with_custom_width(custom_width)
                                         .with_hidden(hidden)
-                                        .with_best_fit(best_fit);
+                                        .with_best_fit(best_fit)
+                                        .with_style(style);
                                     layout = layout.add_column_width(column_width);
                                 }
                             }
@@ -2927,6 +2934,8 @@ impl<RS: Read + Seek> Xlsx<RS> {
                                 let mut hidden = false;
                                 let mut thick_top = false;
                                 let mut thick_bottom = false;
+                                let mut custom_format = false;
+                                let mut style = None;
 
                                 for attr in row_e.attributes() {
                                     let attr = attr.map_err(XlsxError::XmlAttr)?;
@@ -2959,9 +2968,22 @@ impl<RS: Read + Seek> Xlsx<RS> {
                                         b"thickBot" => {
                                             thick_bottom = &*attr.value != b"0";
                                         }
+                                        b"customFormat" => {
+                                            custom_format = &*attr.value != b"0";
+                                        }
+                                        b"s" => {
+                                            if let Ok(style_str) = xml.decoder().decode(&attr.value)
+                                            {
+                                                style = style_str.parse::<usize>().ok();
+                                            }
+                                        }
                                         _ => {}
                                     }
                                 }
+
+                                // A row's `s` attribute is only meaningful when
+                                // `customFormat` is set.
+                                let style = if custom_format { style } else { None };
 
                                 if let Some(row) = row_num {
                                     if custom_height
@@ -2969,12 +2991,14 @@ impl<RS: Read + Seek> Xlsx<RS> {
                                         || thick_top
                                         || thick_bottom
                                         || height > 0.0
+                                        || style.is_some()
                                     {
                                         let row_height = RowHeight::new(row, height)
                                             .with_custom_height(custom_height)
                                             .with_hidden(hidden)
                                             .with_thick_top(thick_top)
-                                            .with_thick_bottom(thick_bottom);
+                                            .with_thick_bottom(thick_bottom)
+                                            .with_style(style);
                                         layout = layout.add_row_height(row_height);
                                     }
                                 }
@@ -4339,75 +4363,6 @@ fn get_row_and_optional_column(range: &[u8]) -> Result<(u32, Option<u32>), XlsxE
     Ok((row, col.checked_sub(1)))
 }
 
-/// Attempts to read either a simple or richtext string, reusing caller-provided
-/// buffers to avoid per-call allocations.
-pub(crate) fn read_string_with_bufs<RS>(
-    xml: &mut XlReader<'_, RS>,
-    closing: QName,
-    xml_buf: &mut Vec<u8>,
-    text_buf: &mut Vec<u8>,
-) -> Result<Option<String>, XlsxError>
-where
-    RS: Read + Seek,
-{
-    let mut rich_buffer: Option<String> = None;
-    let mut is_phonetic_text = false;
-    loop {
-        xml_buf.clear();
-        match xml.read_event_into(xml_buf) {
-            Ok(Event::Start(e)) if e.local_name().as_ref() == b"r" && rich_buffer.is_none() => {
-                // use a buffer since richtext has multiples <r> and <t> for the same cell
-                rich_buffer = Some(String::new());
-            }
-            Ok(Event::Start(e)) if e.local_name().as_ref() == b"rPh" => {
-                is_phonetic_text = true;
-            }
-            Ok(Event::End(e)) if e.name() == closing => {
-                if rich_buffer.is_none() {
-                    // An empty <s></s> element, without <t> or other
-                    // subelements, is treated as a valid empty string in Excel.
-                    rich_buffer = Some(String::new());
-                }
-                return Ok(rich_buffer);
-            }
-            Ok(Event::End(e)) if e.local_name().as_ref() == b"rPh" => {
-                is_phonetic_text = false;
-            }
-            Ok(Event::Start(e)) if e.local_name().as_ref() == b"t" && !is_phonetic_text => {
-                let preserve_space =
-                    matches!(e.raw_attr(b"xml:space")?, Some(v) if v == b"preserve");
-                text_buf.clear();
-                let mut value = String::new();
-                loop {
-                    match xml.read_event_into(text_buf)? {
-                        Event::Text(t) => value.push_str(&t.xml10_content()?),
-                        Event::CData(t) => value.push_str(&t.xml10_content()?),
-                        Event::GeneralRef(e) => unescape_entity_to_buffer(&e, &mut value)?,
-                        Event::End(end) if end.name() == e.name() => break,
-                        Event::Eof => return Err(XlsxError::XmlEof("t")),
-                        _ => (),
-                    }
-                }
-                let value = if preserve_space {
-                    unescape_xml(&value).into_owned()
-                } else {
-                    // Trim ASCII whitespace (space/tab/CR/LF). Unicode spaces
-                    // such as U+00A0 (NBSP) are preserved.
-                    unescape_xml(value.trim_matches([' ', '\t', '\r', '\n'])).into_owned()
-                };
-                if let Some(s) = &mut rich_buffer {
-                    s.push_str(&value);
-                } else {
-                    rich_buffer = Some(value);
-                }
-            }
-            Ok(Event::Eof) => return Err(XlsxError::XmlEof("")),
-            Err(e) => return Err(XlsxError::Xml(e)),
-            _ => (),
-        }
-    }
-}
-
 /// Result of parsing run properties - includes both the font and whether there's "rich" formatting
 struct RunPropertiesResult {
     font: Font,
@@ -4635,9 +4590,10 @@ fn parse_run_color(
     Ok(None)
 }
 
-/// Read a string from shared strings, preserving rich text formatting if present.
-/// Returns Data::String for plain text or Data::RichText for formatted text.
-fn read_rich_string<RS>(
+/// Read a string item (a shared string `<si>` or an inline `<is>`), preserving
+/// rich text formatting if present. Returns Data::String for plain text or
+/// Data::RichText for formatted text.
+pub(crate) fn read_rich_string<RS>(
     xml: &mut XlReader<'_, RS>,
     closing: QName,
 ) -> Result<Option<Data>, XlsxError>
@@ -4646,6 +4602,20 @@ where
 {
     let mut buf = Vec::with_capacity(1024);
     let mut val_buf = Vec::with_capacity(1024);
+    read_rich_string_with_bufs(xml, closing, &mut buf, &mut val_buf)
+}
+
+/// [`read_rich_string`] reusing caller-provided buffers, for the per-cell
+/// inline-string path where a fresh allocation per cell would add up.
+pub(crate) fn read_rich_string_with_bufs<RS>(
+    xml: &mut XlReader<'_, RS>,
+    closing: QName,
+    buf: &mut Vec<u8>,
+    val_buf: &mut Vec<u8>,
+) -> Result<Option<Data>, XlsxError>
+where
+    RS: Read + Seek,
+{
     let mut runs: Vec<TextRun> = Vec::new();
     let mut current_props: Option<RunPropertiesResult> = None;
     let mut is_rich_text = false;
@@ -4655,7 +4625,7 @@ where
 
     loop {
         buf.clear();
-        match xml.read_event_into(&mut buf) {
+        match xml.read_event_into(buf) {
             Ok(Event::Start(e)) if e.local_name().as_ref() == b"r" => {
                 // Start of a rich text run
                 is_rich_text = true;
@@ -4717,8 +4687,9 @@ where
                 val_buf.clear();
                 let mut value = String::new();
                 loop {
-                    match xml.read_event_into(&mut val_buf)? {
+                    match xml.read_event_into(val_buf)? {
                         Event::Text(t) => value.push_str(&unescape_xml(&t.xml10_content()?)),
+                        Event::CData(t) => value.push_str(&t.xml10_content()?),
                         Event::GeneralRef(e) => unescape_entity_to_buffer(&e, &mut value)?,
                         Event::End(end) if end.name() == e.name() => break,
                         Event::Eof => return Err(XlsxError::XmlEof("t")),

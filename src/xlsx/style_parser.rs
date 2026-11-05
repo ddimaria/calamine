@@ -404,6 +404,8 @@ fn parse_border_style(s: &str) -> BorderStyle {
         "mediumDashed" => BorderStyle::MediumDashed,
         "dashDot" => BorderStyle::DashDot,
         "dashDotDot" => BorderStyle::DashDotDot,
+        "mediumDashDot" => BorderStyle::MediumDashDot,
+        "mediumDashDotDot" => BorderStyle::MediumDashDotDot,
         "slantDashDot" => BorderStyle::SlantDashDot,
         _ => BorderStyle::None,
     }

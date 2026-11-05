@@ -6,7 +6,7 @@ use quick_xml::events::{BytesStart, Event};
 use std::io::{Read, Seek};
 
 use super::{
-    expand_shared_formula, get_dimension, get_row, get_row_column, read_string_with_bufs,
+    expand_shared_formula, get_dimension, get_row, get_row_column, read_rich_string_with_bufs,
     Dimensions, XlReader,
 };
 use crate::attrs::RawAttributes;
@@ -745,9 +745,13 @@ where
 {
     Ok(match e.local_name().as_ref() {
         b"is" => {
-            // inlineStr
-            read_string_with_bufs(xml, e.name(), &mut bufs.xml, &mut bufs.str_inner)?
-                .map_or(DataRef::Empty, DataRef::String)
+            // inlineStr; formatted runs are kept as rich text, the same as a
+            // shared string with runs
+            match read_rich_string_with_bufs(xml, e.name(), &mut bufs.xml, &mut bufs.str_inner)? {
+                Some(Data::RichText(rt)) => DataRef::RichText(rt),
+                Some(Data::String(s)) => DataRef::String(s),
+                _ => DataRef::Empty,
+            }
         }
         // Ignore <v> for inlineStr cells since it is redundant. The value is in
         // the <is> element, which is handled above.

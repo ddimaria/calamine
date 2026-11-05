@@ -191,6 +191,10 @@ pub enum BorderStyle {
     DashDot,
     /// Dash dot dot border.
     DashDotDot,
+    /// Medium dash dot border.
+    MediumDashDot,
+    /// Medium dash dot dot border.
+    MediumDashDotDot,
     /// Slant dash dot border.
     SlantDashDot,
 }
@@ -770,6 +774,9 @@ pub struct ColumnWidth {
     pub hidden: bool,
     /// Best fit width
     pub best_fit: bool,
+    /// Index into the workbook cell style palette (`Xlsx::styles`) applied to
+    /// every cell in the column that has no style of its own.
+    pub style: Option<usize>,
 }
 
 impl ColumnWidth {
@@ -781,7 +788,14 @@ impl ColumnWidth {
             custom_width: false,
             hidden: false,
             best_fit: false,
+            style: None,
         }
+    }
+
+    /// Set the column default style index.
+    pub fn with_style(mut self, style: Option<usize>) -> Self {
+        self.style = style;
+        self
     }
 
     /// Set custom width flag.
@@ -823,6 +837,10 @@ pub struct RowHeight {
     pub thick_top: bool,
     /// Thick bottom border
     pub thick_bottom: bool,
+    /// Index into the workbook cell style palette (`Xlsx::styles`) applied to
+    /// every cell in the row that has no style of its own. Only set when the
+    /// row carries `customFormat="1"`.
+    pub style: Option<usize>,
 }
 
 impl RowHeight {
@@ -835,7 +853,14 @@ impl RowHeight {
             hidden: false,
             thick_top: false,
             thick_bottom: false,
+            style: None,
         }
+    }
+
+    /// Set the row default style index.
+    pub fn with_style(mut self, style: Option<usize>) -> Self {
+        self.style = style;
+        self
     }
 
     /// Set custom height flag.
@@ -1365,6 +1390,30 @@ impl StyleRange {
             offset = run_end;
         }
         None
+    }
+
+    /// Iterate over all cells with their positions, `cellXfs` index and
+    /// style. The index is the same one `<col style>` and `<row s>` refer to,
+    /// so callers can tell a cell with its own style apart from one that
+    /// should inherit a column or row default.
+    pub fn cells_with_ids(&self) -> impl Iterator<Item = (usize, usize, usize, &Style)> + '_ {
+        let width = self.width();
+        self.runs
+            .iter()
+            .flat_map(|run| std::iter::repeat_n(run.style_id, run.count as usize))
+            .enumerate()
+            .filter_map(move |(linear_idx, style_id)| {
+                if width == 0 {
+                    return None;
+                }
+                let style = self.palette.get(style_id as usize)?;
+                Some((
+                    linear_idx / width,
+                    linear_idx % width,
+                    style_id as usize,
+                    style,
+                ))
+            })
     }
 
     /// Iterate over all cells with their positions and styles.
