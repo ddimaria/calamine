@@ -7,9 +7,9 @@ use calamine::Data::{Bool, DateTime, DateTimeIso, DurationIso, Empty, Error, Flo
 use calamine::{
     open_workbook, open_workbook_auto, BorderStyle, CfOperator, CfTextOperator, CfValueObjectType,
     Color, ConditionalFormatRuleType, DataRef, DataType, Dimensions, ExcelDateTime,
-    ExcelDateTimeType, FreezePane, HeaderRow, HorizontalAlignment, IconSetType, Ods, Range, Reader,
-    ReaderRef, Sheet, SheetType, SheetVisible, TimePeriodType, UnderlineStyle, VerticalAlignment,
-    Xls, Xlsb, Xlsx, XlsxFormulaMetadata,
+    ExcelDateTimeType, FillPattern, FreezePane, HeaderRow, HorizontalAlignment, IconSetType, Ods,
+    Range, Reader, ReaderRef, Sheet, SheetType, SheetVisible, TimePeriodType, UnderlineStyle,
+    VerticalAlignment, Xls, Xlsb, Xlsx, XlsxFormulaMetadata,
 };
 use calamine::{CellErrorType::*, Data};
 use rstest::rstest;
@@ -5891,12 +5891,30 @@ fn test_xlsx_medium_dash_dot_borders() {
     assert_eq!(borders.left.style, BorderStyle::MediumDashDot);
     assert_eq!(borders.right.style, BorderStyle::MediumDashDotDot);
 
-    // C1 uses cellXfs index 1
+    // C1 uses cellXfs index 1, D1 index 4
     let ids: Vec<_> = styles
         .cells_with_ids()
         .map(|(r, c, id, _)| (r, c, id))
         .collect();
-    assert_eq!(ids, vec![(0, 0, 1)]);
+    assert_eq!(ids, vec![(0, 0, 1), (0, 1, 4)]);
+}
+
+#[test]
+fn test_xlsx_gradient_fill() {
+    let mut xlsx: Xlsx<_> = wb("excel_parity_fixes.xlsx");
+    let styles = xlsx.worksheet_style("Sheet1").unwrap();
+    // D1 is white-to-blue; C1 (the range start) has no fill
+    let fill = styles
+        .get((0, 1))
+        .and_then(|s| s.fill.as_ref())
+        .expect("D1 should have a fill");
+    assert_eq!(fill.pattern, FillPattern::Gradient);
+    assert_eq!(
+        fill.gradient_stops,
+        vec![Color::new(255, 255, 255, 255), Color::new(255, 0, 0, 255)]
+    );
+    assert_eq!(fill.foreground_color, Some(Color::new(255, 255, 255, 255)));
+    assert_eq!(fill.background_color, Some(Color::new(255, 0, 0, 255)));
 }
 
 #[test]

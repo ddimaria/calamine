@@ -642,6 +642,9 @@ pub enum FillPattern {
     LightGrid,
     /// Light trellis pattern
     LightTrellis,
+    /// Gradient fill (`<gradientFill>`); the colors are in
+    /// [`Fill::gradient_stops`]
+    Gradient,
 }
 
 /// Fill properties
@@ -649,10 +652,13 @@ pub enum FillPattern {
 pub struct Fill {
     /// Fill pattern
     pub pattern: FillPattern,
-    /// Foreground color
+    /// Foreground color. For a gradient this is the first stop.
     pub foreground_color: Option<Color>,
-    /// Background color
+    /// Background color. For a gradient this is the last stop.
     pub background_color: Option<Color>,
+    /// The stop colors of a gradient fill, in document order; empty for
+    /// pattern fills
+    pub gradient_stops: Vec<Color>,
 }
 
 impl Fill {
@@ -667,7 +673,19 @@ impl Fill {
             pattern: FillPattern::Solid,
             foreground_color: Some(color),
             background_color: None,
+            gradient_stops: Vec::new(),
         }
+    }
+
+    /// Add a gradient stop color; the first and last stops double as the
+    /// foreground and background colors.
+    pub fn with_gradient_stop(mut self, color: Color) -> Self {
+        if self.gradient_stops.is_empty() {
+            self.foreground_color = Some(color);
+        }
+        self.background_color = Some(color);
+        self.gradient_stops.push(color);
+        self
     }
 
     /// Set pattern.

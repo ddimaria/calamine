@@ -603,6 +603,18 @@ pub fn parse_fill<RS: BufRead>(
                         fill = fill.with_background_color(color);
                     }
                 }
+                b"gradientFill" => {
+                    fill = fill.with_pattern(FillPattern::Gradient);
+                }
+                // a gradient stop's color
+                b"color" => {
+                    if let Some(color) = parse_color(
+                        &e.attributes().collect::<Result<Vec<_>, _>>()?,
+                        theme_colors,
+                    )? {
+                        fill = fill.with_gradient_stop(color);
+                    }
+                }
                 _ => {}
             },
             Ok(Event::End(ref e)) if e.local_name().as_ref() == b"fill" => break,
