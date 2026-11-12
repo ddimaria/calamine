@@ -5936,3 +5936,23 @@ fn test_xlsx_layout_column_and_row_default_styles() {
     // `s` without `customFormat` is not a row default style
     assert_eq!(layout.row_heights.get(&1).and_then(|r| r.style), None);
 }
+
+/// Excel's dynamic-array and linked-data-type error codes are read as their
+/// own variants, and a code this reader does not know does not fail the
+/// sheet.
+#[test]
+fn test_xlsx_modern_error_codes() {
+    let mut xlsx: Xlsx<_> = wb("error_codes.xlsx");
+    let range = xlsx.worksheet_range("Sheet1").unwrap();
+    range_eq!(
+        range,
+        [
+            [Data::Error(Spill)],
+            [Data::Error(Calc)],
+            [Data::Error(GettingData)],
+            [Data::Error(Unknown)],
+        ]
+    );
+    assert_eq!(Spill.to_string(), "#SPILL!");
+    assert_eq!(Calc.to_string(), "#CALC!");
+}

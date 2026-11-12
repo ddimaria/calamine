@@ -165,6 +165,24 @@ pub enum CellErrorType {
     Value,
     /// Getting data
     GettingData,
+    /// A dynamic array could not spill into its range (`#SPILL!`)
+    Spill,
+    /// A dynamic array calculation failed (`#CALC!`)
+    Calc,
+    /// Access to a data type's content was blocked (`#BLOCKED!`)
+    Blocked,
+    /// A linked data type could not connect (`#CONNECT!`)
+    Connect,
+    /// A linked data type field is missing (`#FIELD!`)
+    Field,
+    /// An error of a kind this version does not know (`#UNKNOWN!`)
+    Unknown,
+    /// A Python in Excel formula failed (`#PYTHON!`)
+    Python,
+    /// An external data source failed (`#EXTERNAL!`)
+    External,
+    /// A linked data type is still being retrieved (`#BUSY!`)
+    Busy,
 }
 
 impl fmt::Display for CellErrorType {
@@ -178,6 +196,15 @@ impl fmt::Display for CellErrorType {
             CellErrorType::Ref => write!(f, "#REF!"),
             CellErrorType::Value => write!(f, "#VALUE!"),
             CellErrorType::GettingData => write!(f, "#DATA!"),
+            CellErrorType::Spill => write!(f, "#SPILL!"),
+            CellErrorType::Calc => write!(f, "#CALC!"),
+            CellErrorType::Blocked => write!(f, "#BLOCKED!"),
+            CellErrorType::Connect => write!(f, "#CONNECT!"),
+            CellErrorType::Field => write!(f, "#FIELD!"),
+            CellErrorType::Unknown => write!(f, "#UNKNOWN!"),
+            CellErrorType::Python => write!(f, "#PYTHON!"),
+            CellErrorType::External => write!(f, "#EXTERNAL!"),
+            CellErrorType::Busy => write!(f, "#BUSY!"),
         }
     }
 }

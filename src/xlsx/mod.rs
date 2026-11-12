@@ -252,6 +252,16 @@ impl FromStr for CellErrorType {
             "#NUM!" => Ok(CellErrorType::Num),
             "#REF!" => Ok(CellErrorType::Ref),
             "#VALUE!" => Ok(CellErrorType::Value),
+            "#GETTING_DATA" => Ok(CellErrorType::GettingData),
+            "#SPILL!" => Ok(CellErrorType::Spill),
+            "#CALC!" => Ok(CellErrorType::Calc),
+            "#BLOCKED!" => Ok(CellErrorType::Blocked),
+            "#CONNECT!" => Ok(CellErrorType::Connect),
+            "#FIELD!" => Ok(CellErrorType::Field),
+            "#UNKNOWN!" => Ok(CellErrorType::Unknown),
+            "#PYTHON!" => Ok(CellErrorType::Python),
+            "#EXTERNAL!" => Ok(CellErrorType::External),
+            "#BUSY!" => Ok(CellErrorType::Busy),
             _ => Err(XlsxError::CellError(s.into())),
         }
     }

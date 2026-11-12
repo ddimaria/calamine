@@ -14,7 +14,7 @@ use crate::{
     datatype::DataRef,
     formats::{format_excel_f64_ref, CellFormat},
     utils::unescape_entity_to_buffer,
-    Cell, Data, Style, XlsxError,
+    Cell, CellErrorType, Data, Style, XlsxError,
 };
 
 #[derive(Clone, Debug)]
@@ -840,7 +840,11 @@ fn read_v<'s>(
         }
         Some(b"b") => Ok(DataRef::Bool(v != b"0")),
         Some(b"d") => Ok(DataRef::DateTimeIso(v_as_str(v)?.to_string())),
-        Some(b"e") => Ok(DataRef::Error(v_as_str(v)?.parse()?)),
+        // an error code this reader does not know must not fail the whole
+        // sheet; Excel itself shows such a value as `#UNKNOWN!`
+        Some(b"e") => Ok(DataRef::Error(
+            v_as_str(v)?.parse().unwrap_or(CellErrorType::Unknown),
+        )),
         Some(b"str") => Ok(DataRef::String(v_as_str(v)?.to_string())),
         Some(b"n") | None => {
             if v.is_empty() {
